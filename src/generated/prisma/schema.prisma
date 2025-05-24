@@ -1,0 +1,202 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication, links with Supabase Auth via UUID
+// Supabase Auth에 있는 사용자와 데이터베이스의 사용자 정보를 연결합니다.
+model User {
+  id            String    @id @default(cuid()) // 내부 DB ID
+  authUserId    String?   @unique // Supabase Auth에서 제공하는 UUID
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          String    @default("USER") // 'USER', 'ADMIN', 'BOOTH_OPERATOR'
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 운영하는 부스가 있을 경우 연결
+  operatedBooths Booth[]
+
+  @@map("users")
+}
+
+// Main festival information
+// 축제 기본 정보 모델
+model Festival {
+  id          String   @id @default(cuid())
+  name        String // 예: "2025 성균관대학교 대동제"
+  year        Int      @unique // 연도별로 하나의 축제만 있도록 설정
+  startDate   DateTime
+  endDate     DateTime
+  theme       String? // 축제 테마
+  description String?  @db.Text // 축제 상세 설명
+  posterUrl   String? // 축제 포스터 이미지 URL
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // A festival has many schedule events, booths, and notices
+  scheduleEvents ScheduleEvent[]
+  booths         Booth[]
+  notices        Notice[]
+
+  @@map("festivals")
+}
+
+// Events happening during the festival (performances, etc.)
+// 축제 기간 동안의 공연 및 이벤트 일정 모델
+model ScheduleEvent {
+  id          String   @id @default(cuid())
+  title       String // 예: "총학생회 개막식"
+  description String?  @db.Text
+  startTime   DateTime
+  endTime     DateTime
+  location    String // 예: "대운동장 특설무대"
+  category    String? // 예: "공연", "이벤트"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  festivalId String
+  festival   Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+
+  // Many artists can perform at one schedule event
+  artists ArtistOnScheduleEvent[]
+
+  @@index([festivalId])
+  @@map("schedule_events")
+}
+
+// Artist information
+// 아티스트 정보 모델
+model Artist {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?  @db.Text
+  genre       String? // 예: "힙합", "발라드"
+  imageUrl    String?
+  // Social media links stored as JSON
+  socialMedia Json? // 예: { "instagram": "...", "youtube": "..." }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // An artist can be in many schedule events
+  scheduleEvents ArtistOnScheduleEvent[]
+
+  @@map("artists")
+}
+
+// Join table for the many-to-many relationship between Artist and ScheduleEvent
+// Artist와 ScheduleEvent의 다대다 관계를 위한 조인 테이블
+model ArtistOnScheduleEvent {
+  artistId        String
+  scheduleEventId String
+  artist          Artist        @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  scheduleEvent   ScheduleEvent @relation(fields: [scheduleEventId], references: [id], onDelete: Cascade)
+  assignedAt      DateTime      @default(now())
+
+  @@id([artistId, scheduleEventId])
+  @@index([artistId])
+  @@index([scheduleEventId])
+  @@map("artists_on_schedule_events")
+}
+
+// Booth information
+// 부스 정보 모델
+model Booth {
+  id             String   @id @default(cuid())
+  name           String // 예: "컴공 주점"
+  description    String?  @db.Text
+  // Coordinates for the interactive map
+  mapCoordinates Json? // 예: { "lat": 37.123, "lng": 127.123 }
+  imageUrl       String? // 부스 대표 이미지
+  operatingHours String? // 예: "18:00 - 24:00"
+  category       String // 예: "음식", "주류", "체험", "굿즈"
+  isPopular      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  festivalId String
+  festival   Festival @relation(fields: [festivalId], references: [id], onDelete: Restrict) // 축제가 삭제되면 부스도 삭제될지 고민, Restrict로 안전하게 설정
+
+  boothOperatorId String
+  boothOperator   BoothOperator @relation(fields: [boothOperatorId], references: [id], onDelete: Restrict) // 운영주체 정보가 먼저 삭제되는 것을 방지
+
+  // This links the booth to a specific user who can manage it
+  // 부스를 관리할 수 있는 사용자와 연결 (선택 사항)
+  operatorUserId String?
+  operatorUser   User?   @relation(fields: [operatorUserId], references: [id], onDelete: SetNull) // 사용자가 탈퇴해도 부스 정보는 남도록 설정
+
+  // A booth has many menu items
+  menuItems MenuItem[]
+
+  @@index([festivalId])
+  @@index([boothOperatorId])
+  @@index([operatorUserId])
+  @@map("booths")
+}
+
+// Information about the group running the booth
+// 부스 운영 주체 정보 모델 (학과, 동아리 등)
+model BoothOperator {
+  id          String   @id @default(cuid())
+  name        String   @unique // 예: "컴퓨터공학과 학생회"
+  type        String // 예: "학과", "동아리", "외부업체"
+  contactInfo String?
+  logoUrl     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // An operator can run multiple booths (though usually one)
+  booths Booth[]
+
+  @@map("booth_operators")
+}
+
+// Menu item for a booth
+// 부스 메뉴 아이템 모델
+model MenuItem {
+  id          String   @id @default(cuid())
+  name        String // 예: "김치전"
+  description String?
+  price       Int
+  imageUrl    String?
+  isSignature Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  boothId String
+  booth   Booth  @relation(fields: [boothId], references: [id], onDelete: Cascade) // 부스가 삭제되면 메뉴도 함께 삭제
+
+  @@index([boothId])
+  @@map("menu_items")
+}
+
+// General notices for the festival
+// 축제 공지사항 모델
+model Notice {
+  id        String   @id @default(cuid())
+  title     String
+  content   String   @db.Text
+  category  String? // 예: "일반", "긴급", "교통 통제"
+  isPinned  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  festivalId String
+  festival   Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+
+  @@index([festivalId])
+  @@map("notices")
+}
